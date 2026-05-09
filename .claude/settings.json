@@ -17,7 +17,8 @@
       "Bash(where gh *)",
       "Bash(gh --version)",
       "Bash(git credential *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(node -e ' *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\easyeda\\.claude\\skills\\create-github-repo"
