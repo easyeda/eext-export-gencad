@@ -1,0 +1,8 @@
+{
+	"Export GenCAD": "导出 GenCAD",
+	"Export PCB to GenCAD format": "将 PCB 设计导出为 GenCAD (.cad) 格式，用于 PCB 制造和测试数据交换",
+	"Please open a PCB document first": "请先打开一个 PCB 文档",
+	"Collecting PCB data...": "正在收集 PCB 数据...",
+	"GenCAD export completed": "GenCAD 导出完成",
+	"Export failed": "导出失败"
+}

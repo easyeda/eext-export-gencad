@@ -1,0 +1,8 @@
+{
+	"Export GenCAD": "Export GenCAD",
+	"Export PCB to GenCAD format": "Export PCB design to GenCAD (.cad) format for PCB manufacturing and test data exchange",
+	"Please open a PCB document first": "Please open a PCB document first",
+	"Collecting PCB data...": "Collecting PCB data...",
+	"GenCAD export completed": "GenCAD export completed",
+	"Export failed": "Export failed"
+}

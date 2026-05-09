@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/easyeda/.claude/skills/easyeda-api/references/**)",
+      "Read(//c/Users/easyeda/.claude/skills/easyeda-api/references/classes/**)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(ls -la ~/.claude/skills/ 2>/dev/null || echo \"No user skills dir yet\")",
+      "Read(//c/Users/easyeda/.claude/skills/**)",
+      "Bash(mkdir -p ~/.claude/skills/create-github-repo/scripts)",
+      "Edit(~/.claude/skills/create-github-repo/**)",
+      "Read(//d/��程/easyeda-docs/github-eext/eext-export-gencad/**)",
+      "Bash(xxd)",
+      "Bash(sed -i 's/\"HyperLynx\",/\"GenCAD\",/' \"d:/教程/easyeda-docs/github-eext/eext-export-gencad/extension.json\")",
+      "Bash(sed -i 's/\"Signal Integrity\"/\"Manufacturing\"/' \"d:/教程/easyeda-docs/github-eext/eext-export-gencad/extension.json\")",
+      "Bash(node \"C:/Users/easyeda/.claude/skills/create-github-repo/scripts/create-repo.mjs\")",
+      "Bash(where gh *)",
+      "Bash(gh --version)",
+      "Bash(git credential *)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\easyeda\\.claude\\skills\\create-github-repo"
+    ]
+  }
+}
