@@ -16,7 +16,8 @@
       "Bash(node \"C:/Users/easyeda/.claude/skills/create-github-repo/scripts/create-repo.mjs\")",
       "Bash(where gh *)",
       "Bash(gh --version)",
-      "Bash(git credential *)"
+      "Bash(git credential *)",
+      "Bash(git commit -m ' *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\easyeda\\.claude\\skills\\create-github-repo"
