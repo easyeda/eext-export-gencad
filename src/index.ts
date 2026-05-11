@@ -1,8 +1,9 @@
-import * as extensionConfig from '../extension.json';
+import { parseFootprintFile, parseElibuContent } from './footprintParser';
+import { extractFootprintData } from './footprintExtractor';
+import type { FootprintData } from './footprintExtractor';
 
 export function activate(_status?: 'onStartupFinished', _arg?: string): void {}
 
-// EasyEDA PCB unit is 1mil. GenCAD uses inches.
 function mil2inch(mil: number): number {
 	return mil / 1000.0;
 }
@@ -30,9 +31,9 @@ interface LayerInfo {
 
 interface PadStackEntry {
 	id: number;
-	shapeId: number; // 0=round, 1=rect
-	sx: number; // width or diameter in mil
-	sy: number; // height in mil
+	shape: string;
+	width: number;
+	height: number;
 	drill: number;
 	layers: number[];
 	isThrough: boolean;
@@ -47,6 +48,7 @@ interface ComponentInfo {
 	rotation: number;
 	layer: number;
 	pads: Array<{ primitiveId: string; net: string; padNumber: string }>;
+	footprintData: FootprintData | null;
 }
 
 interface PadExportInfo {
@@ -78,6 +80,39 @@ interface TraceInfo {
 	width: number;
 }
 
+function padStackKey(shape: string, w: number, h: number, drill: number, isThrough: boolean): string {
+	return `${shape}_${w}_${h}_${drill}_${isThrough}`;
+}
+
+async function getFootprintData(comp: IPCB_PrimitiveComponent, cache: Map<string, FootprintData | null>): Promise<FootprintData | null> {
+	const fpInfo = comp.getState_Footprint?.();
+	if (!fpInfo || !fpInfo.uuid) return null;
+
+	const cacheKey = fpInfo.uuid;
+	if (cache.has(cacheKey)) return cache.get(cacheKey)!;
+
+	try {
+		const file = await eda.sys_FileManager.getFootprintFileByFootprintUuid(fpInfo.uuid, fpInfo.libraryUuid, 'elibz2');
+		if (!file) {
+			cache.set(cacheKey, null);
+			return null;
+		}
+		const content = await parseFootprintFile(file);
+		if (!content) {
+			cache.set(cacheKey, null);
+			return null;
+		}
+		const primitives = parseElibuContent(content);
+		const data = extractFootprintData(primitives);
+		cache.set(cacheKey, data);
+		return data;
+	}
+	catch {
+		cache.set(cacheKey, null);
+		return null;
+	}
+}
+
 async function collectBoardData() {
 	const layers = await eda.pcb_Layer.getAllLayers();
 	const nets = await eda.pcb_Net.getAllNetsName();
@@ -94,8 +129,11 @@ async function collectBoardData() {
 	}
 	copperLayers.sort((a, b) => a.id - b.id);
 
+	const footprintCache = new Map<string, FootprintData | null>();
 	const components: ComponentInfo[] = [];
+
 	for (const comp of allComponents) {
+		const fpData = await getFootprintData(comp, footprintCache);
 		components.push({
 			primitiveId: comp.getState_PrimitiveId(),
 			designator: comp.getState_Designator() || '',
@@ -105,80 +143,86 @@ async function collectBoardData() {
 			rotation: comp.getState_Rotation(),
 			layer: comp.getState_Layer() as number,
 			pads: comp.getState_Pads() || [],
+			footprintData: fpData,
 		});
+	}
+
+	const compByPrimId = new Map<string, ComponentInfo>();
+	for (const comp of components) {
+		compByPrimId.set(comp.primitiveId, comp);
 	}
 
 	const padStacks: PadStackEntry[] = [];
 	const padExports: PadExportInfo[] = [];
 
-	function findOrAddPadStack(shapeId: number, sx: number, sy: number, drill: number, layers: number[], isThrough: boolean): number {
+	function findOrAddPadStack(shape: string, w: number, h: number, drill: number, layers: number[], isThrough: boolean): number {
+		const key = padStackKey(shape, w, h, drill, isThrough);
 		for (const ps of padStacks) {
-			if (ps.shapeId === shapeId && ps.sx === sx && ps.sy === sy && ps.drill === drill && ps.isThrough === isThrough) {
+			if (padStackKey(ps.shape, ps.width, ps.height, ps.drill, ps.isThrough) === key) {
 				return ps.id;
 			}
 		}
 		const id = padStacks.length;
-		padStacks.push({ id, shapeId, sx, sy, drill, layers, isThrough });
+		padStacks.push({ id, shape, width: w, height: h, drill, layers, isThrough });
 		return id;
 	}
 
-	for (const pad of allPads) {
-		const padShape = pad.getState_Pad();
-		let sx = 0;
-		let sy = 0;
-		let shapeId = 0;
-		if (padShape) {
-			if ('width' in padShape && 'height' in padShape) {
-				sx = (padShape as any).width || 0;
-				sy = (padShape as any).height || 0;
-			}
-			else if ('diameter' in padShape) {
-				sx = (padShape as any).diameter || 0;
-				sy = sx;
-			}
-			const shapeType = ((padShape as any).shape || (padShape as any).type || '').toUpperCase();
-			if (shapeType === 'RECT' || shapeType === 'RECTANGLE') shapeId = 1;
-			else shapeId = 0;
-		}
-		const hole = pad.getState_Hole();
-		const drill = hole && 'diameter' in hole ? (hole as any).diameter || 0 : 0;
-		const layerId = pad.getState_Layer() as number;
-		const isThrough = drill > 0;
+	// Build pad exports from footprint data when available, fallback to PCB pads
+	for (const comp of components) {
+		if (!comp.designator) continue;
 
-		const psId = findOrAddPadStack(
-			shapeId, sx, sy, drill,
-			isThrough ? copperLayers.map(l => l.id) : [layerId],
-			isThrough,
-		);
+		if (comp.footprintData && comp.footprintData.pads.length > 0) {
+			for (const fpPad of comp.footprintData.pads) {
+				const isThrough = fpPad.holeDiameter > 0;
+				const psLayers = isThrough ? copperLayers.map(l => l.id) : [comp.layer];
+				const psId = findOrAddPadStack(
+					fpPad.shape, fpPad.width, fpPad.height, fpPad.holeDiameter,
+					psLayers, isThrough,
+				);
 
-		const net = pad.getState_Net() || '';
-		const parentId = (pad as any).getState_ParentPrimitiveId?.() || '';
-		let ref = '';
-		let padNumber = pad.getState_PadNumber() || '1';
+				// Find net for this pad from component's pad list
+				let net = '';
+				const matchPad = comp.pads.find(p => p.padNumber === fpPad.padNumber);
+				if (matchPad) net = matchPad.net || '';
 
-		for (const comp of components) {
-			const matchPad = comp.pads.find(p => p.primitiveId === pad.getState_PrimitiveId());
-			if (matchPad) {
-				ref = comp.designator || 'EMPTY';
-				padNumber = matchPad.padNumber || padNumber;
-				break;
+				// Footprint pad coordinates are local to component origin
+				const padX = comp.x + fpPad.x;
+				const padY = comp.y + fpPad.y;
+
+				padExports.push({
+					x: padX,
+					y: padY,
+					net,
+					ref: comp.designator,
+					padNumber: fpPad.padNumber || '1',
+					padStackId: psId,
+				});
 			}
 		}
+		else {
+			// Fallback: use PCB-level pad data
+			for (const padInfo of comp.pads) {
+				const pcbPad = allPads.find(p => p.getState_PrimitiveId() === padInfo.primitiveId);
+				if (!pcbPad) continue;
 
-		if (!ref && parentId) {
-			const parentComp = components.find(c => c.primitiveId === parentId);
-			if (parentComp) ref = parentComp.designator || 'EMPTY';
-		}
+				const hole = pcbPad.getState_Hole();
+				const drill = hole && 'diameter' in hole ? (hole as any).diameter || 0 : 0;
+				const isThrough = drill > 0;
+				const layerId = pcbPad.getState_Layer() as number;
+				const psLayers = isThrough ? copperLayers.map(l => l.id) : [layerId];
 
-		if (ref) {
-			padExports.push({
-				x: pad.getState_X(),
-				y: pad.getState_Y(),
-				net,
-				ref,
-				padNumber,
-				padStackId: psId,
-			});
+				// Fallback shape: use a default round pad
+				const psId = findOrAddPadStack('ELLIPSE', 60, 60, drill, psLayers, isThrough);
+
+				padExports.push({
+					x: pcbPad.getState_X(),
+					y: pcbPad.getState_Y(),
+					net: padInfo.net || '',
+					ref: comp.designator,
+					padNumber: padInfo.padNumber || '1',
+					padStackId: psId,
+				});
+			}
 		}
 	}
 
@@ -186,7 +230,7 @@ async function collectBoardData() {
 	for (const via of allVias) {
 		const diameter = via.getState_Diameter();
 		const holeDiameter = via.getState_HoleDiameter();
-		const psId = findOrAddPadStack(0, diameter, diameter, holeDiameter, copperLayers.map(l => l.id), true);
+		const psId = findOrAddPadStack('ELLIPSE', diameter, diameter, holeDiameter, copperLayers.map(l => l.id), true);
 		vias.push({
 			primitiveId: via.getState_PrimitiveId(),
 			x: via.getState_X(),
@@ -218,20 +262,7 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 	const { copperLayers, nets, components, vias, traces, padStacks, padExports } = data;
 	const out: string[] = [];
 
-	// Pad shape registry: (shapeId, sx, sy) -> pad name
-	const padShapeMap = new Map<string, string>();
-	function getPadName(shapeId: number, sx: number, sy: number): string {
-		const key = `${shapeId}_${sx}_${sy}`;
-		if (!padShapeMap.has(key)) {
-			padShapeMap.set(key, `pad${padShapeMap.size}`);
-		}
-		return padShapeMap.get(key)!;
-	}
-	for (const ps of padStacks) {
-		getPadName(ps.shapeId, ps.sx, ps.sy);
-	}
-
-	// Track width registry: width -> track name
+	// Track width registry
 	const trackMap = new Map<number, string>();
 	function getTrackName(width: number): string {
 		if (!trackMap.has(width)) {
@@ -273,18 +304,24 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 
 	// ========== $PADS ==========
 	out.push('$PADS');
-	for (const [key, name] of padShapeMap) {
-		const parts = key.split('_');
-		const shapeId = Number(parts[0]);
-		const sx = Number(parts[1]);
-		const sy = Number(parts[2]);
-		if (shapeId === 1) {
-			out.push(`PAD ${name} RECTANGULAR 0`);
-			out.push(`RECTANGLE ${fmt(-sx / 2)} ${fmt(-sy / 2)} ${fmt(sx)} ${fmt(sy)}`);
+	const padDefs = new Map<number, boolean>();
+	for (const ps of padStacks) {
+		if (padDefs.has(ps.id)) continue;
+		padDefs.set(ps.id, true);
+
+		const shape = ps.shape.toUpperCase();
+		if (shape === 'RECT' || shape === 'RECTANGLE' || shape === 'ROUNDRECT') {
+			out.push(`PAD pad${ps.id} RECTANGULAR 0`);
+			out.push(`RECTANGLE ${fmt(-ps.width / 2)} ${fmt(-ps.height / 2)} ${fmt(ps.width)} ${fmt(ps.height)}`);
+		}
+		else if (shape === 'OVAL') {
+			out.push(`PAD pad${ps.id} ROUND 0`);
+			out.push(`CIRCLE 0 0 ${fmt(Math.max(ps.width, ps.height) / 2)}`);
 		}
 		else {
-			out.push(`PAD ${name} ROUND 0`);
-			out.push(`CIRCLE 0 0 ${fmt(sx / 2)}`);
+			// ELLIPSE, NGON, or default → round
+			out.push(`PAD pad${ps.id} ROUND 0`);
+			out.push(`CIRCLE 0 0 ${fmt(ps.width / 2)}`);
 		}
 	}
 	out.push('$ENDPADS');
@@ -293,10 +330,9 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 	// ========== $PADSTACKS ==========
 	out.push('$PADSTACKS');
 	for (const ps of padStacks) {
-		const padName = getPadName(ps.shapeId, ps.sx, ps.sy);
 		out.push(`PADSTACK ps${ps.id} ${fmt(ps.drill)}`);
 		for (const layerId of ps.layers) {
-			out.push(`PAD ${padName} ${layerIdToGencad(layerId)} 0 0`);
+			out.push(`PAD pad${ps.id} ${layerIdToGencad(layerId)} 0 0`);
 		}
 	}
 	out.push('$ENDPADSTACKS');
@@ -315,12 +351,52 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 	for (const comp of components) {
 		if (!comp.designator) continue;
 		out.push(`SHAPE shape_${comp.designator}`);
-		const compPads = padExports.filter(p => p.ref === comp.designator);
-		for (const pad of compPads) {
-			const relX = pad.x - comp.x;
-			const relY = comp.y - pad.y;
-			const layer = comp.layer === 1 ? 'TOP' : 'BOTTOM';
-			out.push(`PIN ${pad.padNumber} ps${pad.padStackId} ${fmt(relX)} ${fmt(relY)} ${layer} 0 0`);
+
+		// Silkscreen outline from footprint source
+		if (comp.footprintData && comp.footprintData.outlines.length > 0) {
+			for (const ln of comp.footprintData.outlines) {
+				out.push(`LINE ${fmt(ln.x1)} ${fmt(-ln.y1)} ${fmt(ln.x2)} ${fmt(-ln.y2)}`);
+			}
+		}
+		else {
+			// Fallback: simple box from pad extents
+			const compPads = padExports.filter(p => p.ref === comp.designator);
+			if (compPads.length > 0) {
+				let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
+				for (const p of compPads) {
+					const rx = p.x - comp.x;
+					const ry = p.y - comp.y;
+					if (rx < pMinX) pMinX = rx;
+					if (rx > pMaxX) pMaxX = rx;
+					if (ry < pMinY) pMinY = ry;
+					if (ry > pMaxY) pMaxY = ry;
+				}
+				const pad = 30;
+				pMinX -= pad; pMinY -= pad; pMaxX += pad; pMaxY += pad;
+				out.push(`LINE ${fmt(pMinX)} ${fmt(-pMinY)} ${fmt(pMaxX)} ${fmt(-pMinY)}`);
+				out.push(`LINE ${fmt(pMaxX)} ${fmt(-pMinY)} ${fmt(pMaxX)} ${fmt(-pMaxY)}`);
+				out.push(`LINE ${fmt(pMaxX)} ${fmt(-pMaxY)} ${fmt(pMinX)} ${fmt(-pMaxY)}`);
+				out.push(`LINE ${fmt(pMinX)} ${fmt(-pMaxY)} ${fmt(pMinX)} ${fmt(-pMinY)}`);
+			}
+		}
+
+		// Pins from footprint data
+		if (comp.footprintData && comp.footprintData.pads.length > 0) {
+			for (const fpPad of comp.footprintData.pads) {
+				const compPadExport = padExports.find(p => p.ref === comp.designator && p.padNumber === fpPad.padNumber);
+				if (!compPadExport) continue;
+				const layer = comp.layer === 1 ? 'TOP' : 'BOTTOM';
+				out.push(`PIN ${fpPad.padNumber} ps${compPadExport.padStackId} ${fmt(fpPad.x)} ${fmt(-fpPad.y)} ${layer} 0 0`);
+			}
+		}
+		else {
+			const compPads = padExports.filter(p => p.ref === comp.designator);
+			for (const pad of compPads) {
+				const relX = pad.x - comp.x;
+				const relY = pad.y - comp.y;
+				const layer = comp.layer === 1 ? 'TOP' : 'BOTTOM';
+				out.push(`PIN ${pad.padNumber} ps${pad.padStackId} ${fmt(relX)} ${fmt(-relY)} ${layer} 0 0`);
+			}
 		}
 	}
 	out.push('$ENDSHAPES');
@@ -423,7 +499,7 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 export async function exportGencad(): Promise<void> {
 	try {
 		const doc = await eda.dmt_SelectControl.getCurrentDocumentInfo();
-		if (!doc || doc.documentType !== 3 /* EDMT_EditorDocumentType.PCB */) {
+		if (!doc || doc.documentType !== 3) {
 			eda.sys_Dialog.showInformationMessage(
 				eda.sys_I18n.text('Please open a PCB document first'),
 				eda.sys_I18n.text('Export GenCAD'),
