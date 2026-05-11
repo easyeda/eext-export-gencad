@@ -7,8 +7,19 @@ function mil2inch(mil: number): number {
 	return mil / 1000.0;
 }
 
-function fmtInch(mil: number): string {
+function fmt(mil: number): string {
 	return mil2inch(mil).toFixed(6);
+}
+
+function layerIdToGencad(id: number): string {
+	if (id === 1) return 'TOP';
+	if (id === 2) return 'BOTTOM';
+	if (id >= 3 && id <= 32) return `INNER${id - 2}`;
+	return 'ALL';
+}
+
+function isCopperLayer(layerId: number): boolean {
+	return layerId === 1 || layerId === 2 || (layerId >= 3 && layerId <= 32);
 }
 
 interface LayerInfo {
@@ -19,10 +30,9 @@ interface LayerInfo {
 
 interface PadStackEntry {
 	id: number;
-	shapeId: number;
-	sx: number;
-	sy: number;
-	angle: number;
+	shapeId: number; // 0=round, 1=rect
+	sx: number; // width or diameter in mil
+	sy: number; // height in mil
 	drill: number;
 	layers: number[];
 	isThrough: boolean;
@@ -39,6 +49,15 @@ interface ComponentInfo {
 	pads: Array<{ primitiveId: string; net: string; padNumber: string }>;
 }
 
+interface PadExportInfo {
+	x: number;
+	y: number;
+	net: string;
+	ref: string;
+	padNumber: string;
+	padStackId: number;
+}
+
 interface ViaInfo {
 	primitiveId: string;
 	x: number;
@@ -46,15 +65,6 @@ interface ViaInfo {
 	net: string;
 	diameter: number;
 	holeDiameter: number;
-	padStackId: number;
-}
-
-interface PadExportInfo {
-	x: number;
-	y: number;
-	net: string;
-	ref: string;
-	padNumber: string;
 	padStackId: number;
 }
 
@@ -68,14 +78,6 @@ interface TraceInfo {
 	width: number;
 }
 
-function isCopperLayer(layer: LayerInfo): boolean {
-	return layer.id === 1 || layer.id === 2 || (layer.id >= 3 && layer.id <= 32);
-}
-
-function sanitizeLayerName(name: string): string {
-	return name.replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 20);
-}
-
 async function collectBoardData() {
 	const layers = await eda.pcb_Layer.getAllLayers();
 	const nets = await eda.pcb_Net.getAllNetsName();
@@ -86,13 +88,8 @@ async function collectBoardData() {
 
 	const copperLayers: LayerInfo[] = [];
 	for (const l of layers) {
-		const info: LayerInfo = {
-			id: l.id as number,
-			name: l.name,
-			type: l.type as string,
-		};
-		if (isCopperLayer(info)) {
-			copperLayers.push(info);
+		if (isCopperLayer(l.id as number)) {
+			copperLayers.push({ id: l.id as number, name: l.name, type: l.type as string });
 		}
 	}
 	copperLayers.sort((a, b) => a.id - b.id);
@@ -114,17 +111,14 @@ async function collectBoardData() {
 	const padStacks: PadStackEntry[] = [];
 	const padExports: PadExportInfo[] = [];
 
-	function findOrAddPadStack(entry: Omit<PadStackEntry, 'id'>): number {
+	function findOrAddPadStack(shapeId: number, sx: number, sy: number, drill: number, layers: number[], isThrough: boolean): number {
 		for (const ps of padStacks) {
-			if (ps.shapeId === entry.shapeId
-				&& ps.sx === entry.sx && ps.sy === entry.sy
-				&& ps.drill === entry.drill && ps.angle === entry.angle
-				&& ps.isThrough === entry.isThrough) {
+			if (ps.shapeId === shapeId && ps.sx === sx && ps.sy === sy && ps.drill === drill && ps.isThrough === isThrough) {
 				return ps.id;
 			}
 		}
 		const id = padStacks.length;
-		padStacks.push({ ...entry, id });
+		padStacks.push({ id, shapeId, sx, sy, drill, layers, isThrough });
 		return id;
 	}
 
@@ -132,7 +126,7 @@ async function collectBoardData() {
 		const padShape = pad.getState_Pad();
 		let sx = 0;
 		let sy = 0;
-		let shapeId = 0; // 0=round/oval, 1=rect, 2=roundrect
+		let shapeId = 0;
 		if (padShape) {
 			if ('width' in padShape && 'height' in padShape) {
 				sx = (padShape as any).width || 0;
@@ -144,28 +138,18 @@ async function collectBoardData() {
 			}
 			const shapeType = ((padShape as any).shape || (padShape as any).type || '').toUpperCase();
 			if (shapeType === 'RECT' || shapeType === 'RECTANGLE') shapeId = 1;
-			else if (shapeType === 'ROUNDRECT') shapeId = 2;
 			else shapeId = 0;
 		}
 		const hole = pad.getState_Hole();
-		let drill = 0;
-		if (hole && 'diameter' in hole) {
-			drill = (hole as any).diameter || 0;
-		}
-		const rotation = pad.getState_Rotation() || 0;
-		const angle = 180.0 - rotation < 0 ? 180.0 - rotation + 360.0 : 180.0 - rotation;
+		const drill = hole && 'diameter' in hole ? (hole as any).diameter || 0 : 0;
 		const layerId = pad.getState_Layer() as number;
 		const isThrough = drill > 0;
 
-		const psId = findOrAddPadStack({
-			shapeId,
-			sx,
-			sy,
-			angle,
-			drill,
-			layers: isThrough ? copperLayers.map(l => l.id) : [layerId],
+		const psId = findOrAddPadStack(
+			shapeId, sx, sy, drill,
+			isThrough ? copperLayers.map(l => l.id) : [layerId],
 			isThrough,
-		});
+		);
 
 		const net = pad.getState_Net() || '';
 		const parentId = (pad as any).getState_ParentPrimitiveId?.() || '';
@@ -202,15 +186,7 @@ async function collectBoardData() {
 	for (const via of allVias) {
 		const diameter = via.getState_Diameter();
 		const holeDiameter = via.getState_HoleDiameter();
-		const psId = findOrAddPadStack({
-			shapeId: 0,
-			sx: diameter,
-			sy: diameter,
-			angle: 0,
-			drill: holeDiameter,
-			layers: copperLayers.map(l => l.id),
-			isThrough: true,
-		});
+		const psId = findOrAddPadStack(0, diameter, diameter, holeDiameter, copperLayers.map(l => l.id), true);
 		vias.push({
 			primitiveId: via.getState_PrimitiveId(),
 			x: via.getState_X(),
@@ -240,19 +216,45 @@ async function collectBoardData() {
 
 function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>>): string {
 	const { copperLayers, nets, components, vias, traces, padStacks, padExports } = data;
-	const lines: string[] = [];
+	const out: string[] = [];
 
-	// $HEADER
-	lines.push('$HEADER');
-	lines.push('PROGRAM "EasyEDA Pro" "1.0"');
-	lines.push('UNITS INCH');
-	lines.push('FILEFORMAT "GENCAD 1.4"');
-	lines.push('$ENDHEADER');
-	lines.push('');
+	// Pad shape registry: (shapeId, sx, sy) -> pad name
+	const padShapeMap = new Map<string, string>();
+	function getPadName(shapeId: number, sx: number, sy: number): string {
+		const key = `${shapeId}_${sx}_${sy}`;
+		if (!padShapeMap.has(key)) {
+			padShapeMap.set(key, `pad${padShapeMap.size}`);
+		}
+		return padShapeMap.get(key)!;
+	}
+	for (const ps of padStacks) {
+		getPadName(ps.shapeId, ps.sx, ps.sy);
+	}
 
-	// $BOARD
-	lines.push('$BOARD');
-	lines.push('$OUTLINE');
+	// Track width registry: width -> track name
+	const trackMap = new Map<number, string>();
+	function getTrackName(width: number): string {
+		if (!trackMap.has(width)) {
+			trackMap.set(width, `trk${trackMap.size}`);
+		}
+		return trackMap.get(width)!;
+	}
+	for (const tr of traces) {
+		getTrackName(tr.width);
+	}
+
+	// ========== $HEADER ==========
+	out.push('$HEADER');
+	out.push('GENCAD 1.4');
+	out.push('USER "EasyEDA Pro"');
+	out.push('UNITS INCH');
+	out.push('ORIGIN 0 0');
+	out.push('INTERTRACK 0');
+	out.push('$ENDHEADER');
+	out.push('');
+
+	// ========== $BOARD ==========
+	out.push('$BOARD');
 	let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 	for (const comp of components) {
 		if (comp.x < minX) minX = comp.x;
@@ -261,104 +263,161 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 		if (comp.y > maxY) maxY = comp.y;
 	}
 	if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 4000; maxY = 3000; }
-	const margin = 200;
-	const bx1 = minX - margin, by1 = minY - margin;
-	const bx2 = maxX + margin, by2 = maxY + margin;
-	lines.push(`LINE ${fmtInch(bx1)} ${fmtInch(-by1)} ${fmtInch(bx2)} ${fmtInch(-by1)}`);
-	lines.push(`LINE ${fmtInch(bx2)} ${fmtInch(-by1)} ${fmtInch(bx2)} ${fmtInch(-by2)}`);
-	lines.push(`LINE ${fmtInch(bx2)} ${fmtInch(-by2)} ${fmtInch(bx1)} ${fmtInch(-by2)}`);
-	lines.push(`LINE ${fmtInch(bx1)} ${fmtInch(-by2)} ${fmtInch(bx1)} ${fmtInch(-by1)}`);
-	lines.push('$ENDOUTLINE');
-	lines.push('$ENDBOARD');
-	lines.push('');
+	const m = 200;
+	out.push(`LINE ${fmt(minX - m)} ${fmt(-(minY - m))} ${fmt(maxX + m)} ${fmt(-(minY - m))}`);
+	out.push(`LINE ${fmt(maxX + m)} ${fmt(-(minY - m))} ${fmt(maxX + m)} ${fmt(-(maxY + m))}`);
+	out.push(`LINE ${fmt(maxX + m)} ${fmt(-(maxY + m))} ${fmt(minX - m)} ${fmt(-(maxY + m))}`);
+	out.push(`LINE ${fmt(minX - m)} ${fmt(-(maxY + m))} ${fmt(minX - m)} ${fmt(-(minY - m))}`);
+	out.push('$ENDBOARD');
+	out.push('');
 
-	// $PADSTACKS
-	lines.push('$PADSTACKS');
-	for (const ps of padStacks) {
-		const shapeName = ps.shapeId === 1 ? 'RECTANGLE' : ps.shapeId === 2 ? 'ROUNDRECT' : 'ROUND';
-		lines.push(`PADSTACK "PS_${ps.id}" ${mil2inch(ps.drill).toFixed(6)}`);
-		for (const layerId of ps.layers) {
-			const layer = copperLayers.find(l => l.id === layerId);
-			if (!layer) continue;
-			const layerName = sanitizeLayerName(layer.name);
-			if (ps.sx === ps.sy) {
-				lines.push(`PAD ${shapeName} ${mil2inch(ps.sx).toFixed(6)} "${layerName}"`);
-			}
-			else {
-				lines.push(`PAD ${shapeName} ${mil2inch(ps.sx).toFixed(6)} ${mil2inch(ps.sy).toFixed(6)} "${layerName}"`);
-			}
+	// ========== $PADS ==========
+	out.push('$PADS');
+	for (const [key, name] of padShapeMap) {
+		const parts = key.split('_');
+		const shapeId = Number(parts[0]);
+		const sx = Number(parts[1]);
+		const sy = Number(parts[2]);
+		if (shapeId === 1) {
+			out.push(`PAD ${name} RECTANGULAR 0`);
+			out.push(`RECTANGLE ${fmt(-sx / 2)} ${fmt(-sy / 2)} ${fmt(sx)} ${fmt(sy)}`);
 		}
-		lines.push('END_PADSTACK');
+		else {
+			out.push(`PAD ${name} ROUND 0`);
+			out.push(`CIRCLE 0 0 ${fmt(sx / 2)}`);
+		}
 	}
-	lines.push('$ENDPADSTACKS');
-	lines.push('');
+	out.push('$ENDPADS');
+	out.push('');
 
-	// $COMPONENTS
-	lines.push('$COMPONENTS');
+	// ========== $PADSTACKS ==========
+	out.push('$PADSTACKS');
+	for (const ps of padStacks) {
+		const padName = getPadName(ps.shapeId, ps.sx, ps.sy);
+		out.push(`PADSTACK ps${ps.id} ${fmt(ps.drill)}`);
+		for (const layerId of ps.layers) {
+			out.push(`PAD ${padName} ${layerIdToGencad(layerId)} 0 0`);
+		}
+	}
+	out.push('$ENDPADSTACKS');
+	out.push('');
+
+	// ========== $TRACKS ==========
+	out.push('$TRACKS');
+	for (const [width, name] of trackMap) {
+		out.push(`TRACK ${name} ${fmt(width)}`);
+	}
+	out.push('$ENDTRACKS');
+	out.push('');
+
+	// ========== $SHAPES ==========
+	out.push('$SHAPES');
 	for (const comp of components) {
 		if (!comp.designator) continue;
-		const side = comp.layer === 1 ? 'TOP' : 'BOTTOM';
-		lines.push(`COMPONENT "${comp.designator}"`);
-		lines.push(`PLACE ${fmtInch(comp.x)} ${fmtInch(-comp.y)} ${side} ${comp.rotation.toFixed(2)}`);
+		out.push(`SHAPE shape_${comp.designator}`);
 		const compPads = padExports.filter(p => p.ref === comp.designator);
 		for (const pad of compPads) {
-			lines.push(`PIN "${pad.padNumber}" "PS_${pad.padStackId}" ${fmtInch(pad.x)} ${fmtInch(-pad.y)}`);
+			const relX = pad.x - comp.x;
+			const relY = comp.y - pad.y;
+			const layer = comp.layer === 1 ? 'TOP' : 'BOTTOM';
+			out.push(`PIN ${pad.padNumber} ps${pad.padStackId} ${fmt(relX)} ${fmt(relY)} ${layer} 0 0`);
 		}
-		lines.push('END_COMP');
 	}
-	lines.push('$ENDCOMPONENTS');
-	lines.push('');
+	out.push('$ENDSHAPES');
+	out.push('');
 
-	// $SIGNALS
-	lines.push('$SIGNALS');
+	// ========== $COMPONENTS ==========
+	out.push('$COMPONENTS');
+	for (const comp of components) {
+		if (!comp.designator) continue;
+		const layer = comp.layer === 1 ? 'TOP' : 'BOTTOM';
+		out.push(`COMPONENT ${comp.designator}`);
+		out.push(`DEVICE dev_${comp.designator}`);
+		out.push(`PLACE ${fmt(comp.x)} ${fmt(-comp.y)}`);
+		out.push(`LAYER ${layer}`);
+		out.push(`ROTATION ${comp.rotation.toFixed(2)}`);
+		out.push(`SHAPE shape_${comp.designator} 0 ${comp.layer === 1 ? '0' : 'FLIP'}`);
+	}
+	out.push('$ENDCOMPONENTS');
+	out.push('');
+
+	// ========== $DEVICES ==========
+	out.push('$DEVICES');
+	for (const comp of components) {
+		if (!comp.designator) continue;
+		out.push(`DEVICE dev_${comp.designator}`);
+		out.push(`DESC "${comp.name}"`);
+	}
+	out.push('$ENDDEVICES');
+	out.push('');
+
+	// ========== $SIGNALS ==========
+	out.push('$SIGNALS');
 	for (const netName of nets) {
 		if (!netName) continue;
-
 		const netPins = padExports.filter(p => p.net === netName);
-		const netVias = vias.filter(v => v.net === netName);
-		const netTraces = traces.filter(t => t.net === netName);
-
-		if (netPins.length === 0 && netVias.length === 0 && netTraces.length === 0) continue;
-
-		lines.push(`SIGNAL "${netName}"`);
-
+		if (netPins.length === 0) continue;
+		out.push(`SIGNAL ${netName}`);
 		for (const pin of netPins) {
-			lines.push(`NODE "${pin.ref}.${pin.padNumber}"`);
+			out.push(`NODE ${pin.ref} ${pin.padNumber}`);
 		}
-
-		for (const via of netVias) {
-			lines.push(`VIA "PS_${via.padStackId}" ${fmtInch(via.x)} ${fmtInch(-via.y)}`);
-		}
-
-		for (const trace of netTraces) {
-			const layer = copperLayers.find(l => l.id === trace.layer);
-			if (!layer) continue;
-			const layerName = sanitizeLayerName(layer.name);
-			lines.push(`TRACK "${layerName}" ${fmtInch(trace.width)}`);
-			lines.push(`ROUTE ${fmtInch(trace.startX)} ${fmtInch(-trace.startY)} ${fmtInch(trace.endX)} ${fmtInch(-trace.endY)}`);
-			lines.push('END_TRACK');
-		}
-
-		lines.push('END_SIG');
 	}
-	lines.push('$ENDSIGNALS');
-	lines.push('');
+	out.push('$ENDSIGNALS');
+	out.push('');
 
-	// $VIAS
-	const viasWithNet = vias.filter(v => v.net);
-	if (viasWithNet.length > 0) {
-		lines.push('$VIAS');
-		for (const via of viasWithNet) {
-			const topLayer = copperLayers[0] ? sanitizeLayerName(copperLayers[0].name) : 'Top';
-			const botLayer = copperLayers[copperLayers.length - 1] ? sanitizeLayerName(copperLayers[copperLayers.length - 1].name) : 'Bottom';
-			lines.push(`VIA "PS_${via.padStackId}" ${fmtInch(via.x)} ${fmtInch(-via.y)} SIGNAL "${via.net}" ${topLayer} ${botLayer}`);
+	// ========== $ROUTES ==========
+	const hasRoutes = traces.length > 0 || vias.length > 0;
+	if (hasRoutes) {
+		out.push('$ROUTES');
+		const allNetNames = [...new Set([
+			...traces.map(t => t.net),
+			...vias.map(v => v.net),
+		].filter(Boolean))];
+
+		let viaIdx = 0;
+		for (const netName of allNetNames) {
+			out.push(`ROUTE ${netName}`);
+
+			const netTraces = traces.filter(t => t.net === netName);
+			if (netTraces.length > 0) {
+				let curTrack = '';
+				let curLayer = '';
+				for (const trace of netTraces) {
+					const trackName = getTrackName(trace.width);
+					if (trackName !== curTrack) {
+						out.push(`TRACK ${trackName}`);
+						curTrack = trackName;
+						curLayer = '';
+					}
+					const layerName = layerIdToGencad(trace.layer);
+					if (layerName !== curLayer) {
+						out.push(`LAYER ${layerName}`);
+						curLayer = layerName;
+					}
+					out.push(`LINE ${fmt(trace.startX)} ${fmt(-trace.startY)} ${fmt(trace.endX)} ${fmt(-trace.endY)}`);
+				}
+			}
+
+			const netVias = vias.filter(v => v.net === netName);
+			for (const via of netVias) {
+				out.push(`VIA ps${via.padStackId} ${fmt(via.x)} ${fmt(-via.y)} ALL ${fmt(via.holeDiameter)} via${viaIdx++}`);
+			}
 		}
-		lines.push('$ENDVIAS');
-		lines.push('');
+		out.push('$ENDROUTES');
+		out.push('');
 	}
 
-	lines.push('$END');
-	return lines.join('\n');
+	// ========== $LAYERS ==========
+	out.push('$LAYERS');
+	for (const cl of copperLayers) {
+		const gencadName = layerIdToGencad(cl.id);
+		out.push(`DEFINE ${gencadName} "${cl.name}"`);
+	}
+	out.push('$ENDLAYERS');
+	out.push('');
+
+	out.push('$END');
+	return out.join('\n');
 }
 
 export async function exportGencad(): Promise<void> {

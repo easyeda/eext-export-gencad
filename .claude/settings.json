@@ -18,7 +18,13 @@
       "Bash(gh --version)",
       "Bash(git credential *)",
       "Bash(git commit -m ' *)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(npm root *)",
+      "Bash(node -e \"const m = require\\('C:/Users/easyeda/AppData/Roaming/npm/node_modules/pdf-parse'\\); console.log\\(typeof m, Object.keys\\(m\\).slice\\(0,5\\)\\)\")",
+      "Bash(mkdir -p \"d:/教程/easyeda-docs/github-eext/eext-export-gencad/.tmp\")",
+      "Bash(npm init *)",
+      "WebSearch",
+      "Read(//d/教程/easyeda-docs/github-eext/eext-dynamic-fill-region-for-silkscreen/**)"
     ],
     "additionalDirectories": [
       "C:\\Users\\easyeda\\.claude\\skills\\create-github-repo"
