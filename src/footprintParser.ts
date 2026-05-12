@@ -29,7 +29,9 @@ function parseElibuLine(line: string): { type: string; data: any } | null {
 		const parts = line.split('||');
 		if (parts.length < 2) return null;
 		const header = JSON.parse(parts[0]);
-		const data = JSON.parse(parts[1]);
+		const innerStr = parts[1].replace(/\|$/, '');
+		if (!innerStr) return null;
+		const data = JSON.parse(innerStr);
 		return { type: header.type || '', data };
 	}
 	catch {
