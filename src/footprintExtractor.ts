@@ -43,7 +43,7 @@ export function extractFootprintData(primitives: FootprintPrimitive[]): Footprin
 			let holeDia = 0;
 			if (hole) {
 				if (typeof hole === 'object') {
-					holeDia = Number(hole.diameter ?? hole.radius ? (hole.radius * 2) : 0);
+					holeDia = Number(hole.diameter ?? hole.width ?? (hole.radius ? (hole.radius * 2) : 0));
 				} else {
 					holeDia = Number(hole) || 0;
 				}
