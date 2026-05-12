@@ -813,11 +813,13 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 				localX = desAttr.x;
 				localY = desAttr.y;
 			}
-			const textH = 0.0393701; // 1mm standard
+			const textH = mil2inch(desAttr.fontSize || 50);
+			const textRot = (((desAttr.rotation || 0) - (comp.rotation || 0)) % 360).toFixed(2);
+			const textMirror = desAttr.mirror ? 1 : 0;
 			const textX = mil2inch(localX);
 			const textY = mil2inch(localY);
 			const textW = refDesText.length * textH * 0.6;
-			out.push(`TEXT ${textX.toFixed(6)} ${textY.toFixed(6)} ${textH.toFixed(6)} 0 0 ${textLayer} "${refDesText}" ${textX.toFixed(6)} ${textY.toFixed(6)} ${textW.toFixed(6)} ${textH.toFixed(6)}`);
+			out.push(`TEXT ${textX.toFixed(6)} ${textY.toFixed(6)} ${textH.toFixed(6)} ${textRot} ${textMirror} ${textLayer} "${refDesText}" ${textX.toFixed(6)} ${textY.toFixed(6)} ${textW.toFixed(6)} ${textH.toFixed(6)}`);
 			sheetParts.push(`RefDes: ${refDesText}`);
 		} else {
 			const textH = 0.0393701;
@@ -843,11 +845,13 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 					localX = valAttr.x;
 					localY = valAttr.y;
 				}
-				const textH = 0.0393701;
+				const textH = mil2inch(valAttr.fontSize || 50);
+				const textRot = (((valAttr.rotation || 0) - (comp.rotation || 0)) % 360).toFixed(2);
+				const textMirror = valAttr.mirror ? 1 : 0;
 				const textX = mil2inch(localX);
 				const textY = mil2inch(localY);
 				const textW = valueText.length * textH * 0.6;
-				out.push(`TEXT ${textX.toFixed(6)} ${textY.toFixed(6)} ${textH.toFixed(6)} 0 0 ${textLayer} "${valueText}" ${textX.toFixed(6)} ${textY.toFixed(6)} ${textW.toFixed(6)} ${textH.toFixed(6)}`);
+				out.push(`TEXT ${textX.toFixed(6)} ${textY.toFixed(6)} ${textH.toFixed(6)} ${textRot} ${textMirror} ${textLayer} "${valueText}" ${textX.toFixed(6)} ${textY.toFixed(6)} ${textW.toFixed(6)} ${textH.toFixed(6)}`);
 			} else {
 				const textH = 0.0393701;
 				const valW = valueText.length * textH * 0.6;

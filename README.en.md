@@ -6,19 +6,21 @@ An EasyEDA Pro extension that exports PCB designs to GenCAD (.cad) file format f
 
 ## Features
 
-- Export board outline (BOARD OUTLINE)
-- Export pad stack definitions (PADSTACK) with automatic deduplication
-- Export component and pin information (COMPONENTS)
-- Export net data (SIGNALS) including nodes (NODE), tracks (TRACK), and vias (VIA)
-- Export track data (TRACKS) organized by layer and net
-- Export via data (VIAS)
-- Automatic coordinate conversion: EasyEDA internal units (mil) → inches
-- Compatible with GenCAD 1.4 format
+- Exports PCB to GenCAD 1.4 standard format
+- Parses footprint source data (elibz2/elibu format) for accurate pad geometry and silkscreen outlines
+- Supports native GenCAD CIRCLE and ARC commands (not approximated with line segments)
+- Handles pad rotation angles correctly
+- Outputs TEXT (Designator/Value) with original PCB attributes: coordinates, rotation, mirror, font size
+- Caches footprint data to avoid redundant parsing
+- Exports board outline (supports Polyline, Fill, and Line sources)
+- Exports pad stack definitions with automatic deduplication
+- Exports complete component, pin, net, trace, and via information
+- Automatic coordinate conversion: EasyEDA internal units (mil) to inches
 
 ## Usage
 
 1. Open a PCB document in EasyEDA Pro
-2. Click menu **Export GenCAD → Export GenCAD (.cad)...**
+2. Click the PCB header menu **Export GenCAD → Export GenCAD (.cad)...**
 3. The `.cad` file will be generated and downloaded automatically
 
 ## Output Format
@@ -27,22 +29,54 @@ The generated `.cad` file follows the GenCAD 1.4 format specification with the f
 
 | Section | Description |
 |---------|-------------|
-| `$HEADER` | Program name, version, units (INCH), file format |
+| `$HEADER` | Program name, version, units (INCH), origin |
 | `$BOARD` | Board outline (LINE) |
-| `$PADSTACKS` | Pad stack definitions (PAD) |
-| `$COMPONENTS` | Component list (PLACE / PIN) |
-| `$SIGNALS` | Net data (NODE / VIA / TRACK / ROUTE) |
-| `$VIAS` | Via data |
+| `$PADS` | Pad geometry definitions (ROUND / RECTANGULAR / OBLONG) |
+| `$PADSTACKS` | Pad stack definitions with per-layer pad assignments |
+| `$TRACKS` | Track width definitions |
+| `$SHAPES` | Component shapes (silkscreen outline + pin locations) |
+| `$COMPONENTS` | Component placement (coordinates, rotation, layer, TEXT attributes) |
+| `$DEVICES` | Device type descriptions |
+| `$SIGNALS` | Net connectivity (NODE) |
+| `$ROUTES` | Trace routing paths and vias |
+| `$LAYERS` | Copper layer definitions |
 | `$END` | File terminator |
+
+## Project Structure
+
+```
+src/
+├── index.ts               # Main logic: data collection, GenCAD generation, file export
+├── footprintParser.ts     # Parses elibz2/elibu footprint files (ZIP + JSON)
+└── footprintExtractor.ts  # Extracts pad and silkscreen data from parsed primitives
+```
 
 ## Development
 
 ```shell
 npm install
-npm run build
+npm run compile   # Compile TypeScript and bundle to dist/
+npm run build     # Compile + package as .eext extension
 ```
 
-The extension package is generated at `./build/dist/export-gencad_v1.0.0.eext` and can be installed in EasyEDA Pro.
+Other commands:
+
+```shell
+npm run lint      # ESLint check
+npm run fix       # ESLint auto-fix
+```
+
+## Tech Stack
+
+- TypeScript
+- esbuild (bundling)
+- JSZip (parsing footprint ZIP archives)
+- @jlceda/pro-api-types (EasyEDA Pro extension API types)
+
+## Requirements
+
+- Node.js >= 20.17.0
+- EasyEDA Pro >= 3.2.0
 
 ## License
 
