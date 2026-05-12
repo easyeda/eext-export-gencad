@@ -81,6 +81,7 @@ interface PadExportInfo {
 	padNumber: string;
 	padStackId: number;
 	padId: number;
+	rotation: number;
 }
 
 interface ViaInfo {
@@ -474,6 +475,7 @@ async function collectBoardData() {
 					ref: comp.designator,
 					padNumber: fpPad.padNumber || '1',
 					padStackId: psId, padId: pid,
+					rotation: fpPad.rotation || 0,
 				});
 			}
 		}
@@ -535,6 +537,7 @@ async function collectBoardData() {
 				ref: '',
 				padNumber: '1',
 				padStackId: psId, padId: pid,
+				rotation: 0,
 			});
 		} catch { /* skip */ }
 	}
@@ -756,7 +759,8 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 			const lx = dx * cosA - dy * sinA;
 			const ly = dx * sinA + dy * cosA;
 			const layer = comp.layer === 1 ? 'TOP' : 'BOTTOM';
-			out.push(`PIN "${pad.padNumber}" ${padNameByPsId.get(pad.padStackId) || 'P0'} ${fmt(lx)} ${fmt(ly)} ${layer} 0 0`);
+			const padRot = pad.rotation || 0;
+				out.push(`PIN "${pad.padNumber}" ${padNameByPsId.get(pad.padStackId) || 'P0'} ${fmt(lx)} ${fmt(ly)} ${layer} ${padRot.toFixed(2)} 0`);
 		}
 	}
 
