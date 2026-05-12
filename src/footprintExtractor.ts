@@ -21,6 +21,7 @@ export interface FootprintOutlineLine {
 	y2: number;
 	lineWidth: number;
 	arc?: { cx: number; cy: number };
+	circle?: { cx: number; cy: number; r: number };
 }
 
 export interface FootprintData {
@@ -99,18 +100,7 @@ export function extractFootprintData(primitives: FootprintPrimitive[]): Footprin
 			const radius = Number(d.radius ?? d.r ?? 0);
 			const lw = Number(d.lineWidth ?? d.strokeWidth ?? d.width ?? 6);
 			if (radius > 0) {
-				const segments = 16;
-				for (let i = 0; i < segments; i++) {
-					const a1 = (2 * Math.PI * i) / segments;
-					const a2 = (2 * Math.PI * (i + 1)) / segments;
-					outlines.push({
-						x1: cx + radius * Math.cos(a1),
-						y1: cy + radius * Math.sin(a1),
-						x2: cx + radius * Math.cos(a2),
-						y2: cy + radius * Math.sin(a2),
-						lineWidth: lw,
-					});
-				}
+				outlines.push({ x1: 0, y1: 0, x2: 0, y2: 0, lineWidth: lw, circle: { cx, cy, r: radius } });
 			}
 		}
 		else if (t === 'RECTANGLE' || t === 'RECT') {
@@ -204,18 +194,7 @@ export function extractFootprintData(primitives: FootprintPrimitive[]): Footprin
 							const ccy = Number(path[i + 2]);
 							const cr = Number(path[i + 3]);
 							if (cr > 0) {
-								const segs = 16;
-								for (let ci = 0; ci < segs; ci++) {
-									const ca1 = (2 * Math.PI * ci) / segs;
-									const ca2 = (2 * Math.PI * (ci + 1)) / segs;
-									outlines.push({
-										x1: ccx + cr * Math.cos(ca1),
-										y1: ccy + cr * Math.sin(ca1),
-										x2: ccx + cr * Math.cos(ca2),
-										y2: ccy + cr * Math.sin(ca2),
-										lineWidth: lw,
-									});
-								}
+								outlines.push({ x1: 0, y1: 0, x2: 0, y2: 0, lineWidth: lw, circle: { cx: ccx, cy: ccy, r: cr } });
 							}
 							i += 4;
 						} else if (cmd === 'Z') {

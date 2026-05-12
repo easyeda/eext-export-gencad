@@ -3,7 +3,7 @@
 	"uuid": "32d0d0812f004f08a707b81ff309ab0c",
 	"displayName": "导出GenCAD",
 	"description": "导出 PCB 为 GenCAD (.cad) 格式文件，用于 PCB 制造和测试数据交换。",
-	"version": "1.0.23",
+	"version": "1.0.24",
 	"publisher": "EasyEDA",
 	"engines": {
 		"eda": "^3.2.0"

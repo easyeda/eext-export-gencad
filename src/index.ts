@@ -711,23 +711,10 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 					curWidth = ln.lineWidth;
 					out.push(`WIDTH ${fmt(curWidth)}`);
 				}
-				if (ln.arc) {
-					// Approximate ARC with LINE segments for viewer compatibility
-					const cx = ln.arc.cx, cy = ln.arc.cy;
-					const r = Math.sqrt((ln.x1 - cx) ** 2 + (ln.y1 - cy) ** 2);
-					const a1 = Math.atan2(ln.y1 - cy, ln.x1 - cx);
-					const a2 = Math.atan2(ln.y2 - cy, ln.x2 - cx);
-					let sweep = a2 - a1;
-					if (sweep <= 0) sweep += 2 * Math.PI;
-					const segs = Math.max(8, Math.ceil(sweep / (Math.PI / 8)));
-					let px = ln.x1, py = ln.y1;
-					for (let si = 1; si <= segs; si++) {
-						const a = a1 + sweep * si / segs;
-						const nx = cx + r * Math.cos(a);
-						const ny = cy + r * Math.sin(a);
-						out.push(`LINE ${fmt(px)} ${fmt(py)} ${fmt(nx)} ${fmt(ny)}`);
-						px = nx; py = ny;
-					}
+				if (ln.circle) {
+					out.push(`CIRCLE ${fmt(ln.circle.cx)} ${fmt(ln.circle.cy)} ${fmt(ln.circle.r)}`);
+				} else if (ln.arc) {
+					out.push(`ARC ${fmt(ln.x1)} ${fmt(ln.y1)} ${fmt(ln.x2)} ${fmt(ln.y2)} ${fmt(ln.arc.cx)} ${fmt(ln.arc.cy)}`);
 				} else {
 					out.push(`LINE ${fmt(ln.x1)} ${fmt(ln.y1)} ${fmt(ln.x2)} ${fmt(ln.y2)}`);
 				}
