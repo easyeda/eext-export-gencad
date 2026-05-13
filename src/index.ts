@@ -32,6 +32,15 @@ function layerIdToGencad(id: number, copperLayers?: LayerInfo[]): string {
 	return 'ALL';
 }
 
+function layerIdToGencadArtwork(id: number): string {
+	if (id === 1) return 'TOP';
+	if (id === 2) return 'BOTTOM';
+	if (id === 3) return 'SILKSCREEN_TOP';
+	if (id === 4) return 'SILKSCREEN_BOTTOM';
+	if (id >= 15 && id <= 44) return `INNER${id - 14}`;
+	return 'ALL';
+}
+
 interface LayerInfo {
 	id: number;
 	name: string;
@@ -106,6 +115,8 @@ interface TraceInfo {
 	endX: number;
 	endY: number;
 	width: number;
+	arcCenterX?: number;
+	arcCenterY?: number;
 }
 
 interface BoardOutlineSeg {
@@ -113,6 +124,15 @@ interface BoardOutlineSeg {
 	y1: number;
 	x2: number;
 	y2: number;
+}
+
+interface TextInfo {
+	text: string;
+	x: number;
+	y: number;
+	fontSize: number;
+	rotation: number;
+	layer: number;
 }
 
 function padStackKey(shape: string, w: number, h: number, drill: number, isThrough: boolean): string {
@@ -585,15 +605,79 @@ async function collectBoardData() {
 		catch { /* skip */ }
 	}
 
+		// Collect arc traces
+		const boardArcs = await eda.pcb_PrimitiveArc.getAll().catch(() => [] as any[]);
+		for (const arc of boardArcs) {
+			try {
+				const layer = (arc.getState_Layer as any) ? arc.getState_Layer() as number : 0;
+				if (!isCopperLayer(layer)) continue;
+				let sx = arc.getState_StartX();
+				let sy = arc.getState_StartY();
+				let ex = arc.getState_EndX();
+				let ey = arc.getState_EndY();
+				const arcAngle = arc.getState_ArcAngle?.() ?? 0;
+				const width = arc.getState_LineWidth();
+				const absAngle = Math.abs(arcAngle);
+				let cx = 0, cy = 0;
+				// GenCAD ARC is always CCW; swap start/end for CW arcs
+				if (arcAngle < 0) {
+					[sx, sy, ex, ey] = [ex, ey, sx, sy];
+				}
+				if (absAngle > 0.01 && absAngle < 360) {
+					const halfSweepRad = absAngle * Math.PI / 360;
+					const dx = (ex - sx) / 2;
+					const dy = (ey - sy) / 2;
+					const halfChord = Math.sqrt(dx * dx + dy * dy);
+					if (halfChord > 0) {
+						const r = halfChord / Math.sin(halfSweepRad);
+						const d = r * Math.cos(halfSweepRad);
+						const midX = (sx + ex) / 2;
+						const midY = (sy + ey) / 2;
+						const perpX = -(ey - sy) / (2 * halfChord);
+						const perpY = (ex - sx) / (2 * halfChord);
+						cx = midX + d * perpX;
+						cy = midY + d * perpY;
+					}
+				}
+				traces.push({
+					net: arc.getState_Net() || '',
+					layer,
+					startX: sx, startY: sy,
+					endX: ex, endY: ey,
+					width,
+					arcCenterX: absAngle > 0.01 ? cx : undefined,
+					arcCenterY: absAngle > 0.01 ? cy : undefined,
+				});
+			}
+			catch { /* skip */ }
+		}
+
+	// Collect text primitives
+	const texts: TextInfo[] = [];
+	const boardTexts = await (eda as any).pcb_PrimitiveString.getAll().catch(() => [] as any[]);
+	for (const t of boardTexts) {
+		try {
+			texts.push({
+				text: t.getState_Text(),
+				x: t.getState_X(),
+				y: t.getState_Y(),
+				fontSize: t.getState_FontSize(),
+				rotation: t.getState_Rotation(),
+				layer: t.getState_Layer(),
+			});
+		}
+		catch { /* skip */ }
+	}
+
 	return {
 		copperLayers, nets, components, vias, traces, padStacks, padExports, freePads,
-		boardOutline, boardSilkscreenTop, boardSilkscreenBottom,
+		boardOutline, boardSilkscreenTop, boardSilkscreenBottom, texts,
 	};
 }
 
 function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>>): string {
 	const { copperLayers, nets, components, vias, traces, padStacks, padExports, freePads,
-		boardOutline, boardSilkscreenTop, boardSilkscreenBottom } = data;
+		boardOutline, boardSilkscreenTop, boardSilkscreenBottom, texts } = data;
 	const out: string[] = [];
 
 	const trackMap = new Map<number, string>();
@@ -636,7 +720,24 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 		out.push(`LINE ${fmt(maxX + m)} ${fmt(maxY + m)} ${fmt(minX - m)} ${fmt(maxY + m)}`);
 		out.push(`LINE ${fmt(minX - m)} ${fmt(maxY + m)} ${fmt(minX - m)} ${fmt(minY - m)}`);
 	}
+	// Board texts (on board outline layer)
+	for (const t of texts) {
+		if (t.layer === 11) {
+			out.push(`TEXT ${fmt(t.x)} ${fmt(t.y)} ${fmt(t.fontSize)} ${t.rotation} 0 ALL "${t.text}" 0 0 0 0`);
+		}
+	}
 	out.push('$ENDBOARD');
+	out.push('');
+
+	// ==========  ==========
+	out.push('$ARTWORKS');
+	for (const t of texts) {
+		if (t.layer !== 11) { // skip board outline layer texts
+			const layerName = layerIdToGencadArtwork(t.layer);
+			out.push(`TEXT ${fmt(t.x)} ${fmt(t.y)} ${fmt(t.fontSize)} ${t.rotation} 0 ${layerName} "${t.text}" 0 0 0 0`);
+		}
+	}
+	out.push('$ENDARTWORKS');
 	out.push('');
 
 	// ========== Build PAD name map (unique per geometry) ==========
@@ -674,7 +775,9 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 			}
 			else {
 				// Stadium shape: POLYGON with ARC + LINE (CCW outline)
-				out.push(`PAD ${padName} POLYGON ${fmt(ps.drill)}`);
+				const isSlotHole = ps.drillWidth > 0 && ps.drillHeight > 0 && Math.abs(ps.drillWidth - ps.drillHeight) > 0.01;
+				const drillVal = isSlotHole ? Math.min(ps.drillWidth, ps.drillHeight) : ps.drill;
+				out.push(`PAD ${padName} POLYGON ${fmt(drillVal)}`);
 				const hw = ps.width / 2;
 				const hh = ps.height / 2;
 				if (ps.width > ps.height) {
@@ -689,10 +792,10 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 					// Vertical oval: semicircle radius = hw
 					const r = hw;
 					const sy = hh - r;
-					out.push(`ARC ${fmt(r)} ${fmt(-sy)} ${fmt(-r)} ${fmt(-sy)} 0 ${fmt(-sy)}`);
-					out.push(`LINE ${fmt(-r)} ${fmt(-sy)} ${fmt(-r)} ${fmt(sy)}`);
-					out.push(`ARC ${fmt(-r)} ${fmt(sy)} ${fmt(r)} ${fmt(sy)} 0 ${fmt(sy)}`);
-					out.push(`LINE ${fmt(r)} ${fmt(sy)} ${fmt(r)} ${fmt(-sy)}`);
+					out.push(`ARC ${fmt(-r)} ${fmt(-sy)} ${fmt(r)} ${fmt(-sy)} 0 ${fmt(-sy)}`);
+					out.push(`LINE ${fmt(r)} ${fmt(-sy)} ${fmt(r)} ${fmt(sy)}`);
+					out.push(`ARC ${fmt(r)} ${fmt(sy)} ${fmt(-r)} ${fmt(sy)} 0 ${fmt(sy)}`);
+					out.push(`LINE ${fmt(-r)} ${fmt(sy)} ${fmt(-r)} ${fmt(-sy)}`);
 				}
 			}
 		}
@@ -708,7 +811,8 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 	out.push('$PADSTACKS');
 	for (const ps of padStacks) {
 		const padName = padNameByPsId.get(ps.id)!;
-		out.push(`PADSTACK ps${ps.id} ${fmt(ps.drill)}`);
+		const psDrillVal = (ps.drillWidth > 0 && ps.drillHeight > 0 && Math.abs(ps.drillWidth - ps.drillHeight) > 0.01) ? Math.min(ps.drillWidth, ps.drillHeight) : ps.drill;
+			out.push(`PADSTACK ps${ps.id} ${fmt(psDrillVal)}`);
 		for (const layerId of ps.layers) {
 			out.push(`PAD ${padName} ${layerIdToGencad(layerId, copperLayers)} 0 0`);
 		}
@@ -977,7 +1081,11 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 						out.push(`LAYER ${layerName}`);
 						curLayer = layerName;
 					}
-					out.push(`LINE ${fmt(trace.startX)} ${fmt(trace.startY)} ${fmt(trace.endX)} ${fmt(trace.endY)}`);
+					if (trace.arcCenterX !== undefined && trace.arcCenterY !== undefined) {
+						out.push(`ARC ${fmt(trace.startX)} ${fmt(trace.startY)} ${fmt(trace.endX)} ${fmt(trace.endY)} ${fmt(trace.arcCenterX)} ${fmt(trace.arcCenterY)}`);
+					} else {
+						out.push(`LINE ${fmt(trace.startX)} ${fmt(trace.startY)} ${fmt(trace.endX)} ${fmt(trace.endY)}`);
+					}
 				}
 			}
 
