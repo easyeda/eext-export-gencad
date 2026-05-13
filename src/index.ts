@@ -1063,7 +1063,7 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 
 		let viaIdx = 0;
 		for (const netName of allNetNames) {
-			out.push(`ROUTE ${netName}`);
+			out.push(`ROUTE "${netName}"`);
 
 			const netTraces = traces.filter(t => t.net === netName);
 			if (netTraces.length > 0) {
