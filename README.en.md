@@ -22,6 +22,7 @@ An EasyEDA Pro extension that exports PCB designs to GenCAD (.cad) file format f
 1. Open a PCB document in EasyEDA Pro
 2. Click the PCB header menu **Export GenCAD → Export GenCAD (.cad)...**
 3. The `.cad` file will be generated and downloaded automatically
+4. The`.cad` file you can preview at[Online GernCAD Viewer](https://pcbtool.net/tools/online-gencad-viewer.html)
 
 ## Output Format
 

@@ -44,6 +44,9 @@ interface PadStackEntry {
 	width: number;
 	height: number;
 	drill: number;
+	drillWidth: number;
+	drillHeight: number;
+	drillType: string;
 	layers: number[];
 	isThrough: boolean;
 }
@@ -64,6 +67,7 @@ interface ComponentInfo {
 	designator: string;
 	name: string;
 	value: string;
+	footprintName: string;
 	x: number;
 	y: number;
 	rotation: number; // degrees
@@ -270,6 +274,7 @@ async function collectBoardData() {
 	const LAYER_SILKSCREEN_BOTTOM = 4;
 
 	const layers = await eda.pcb_Layer.getAllLayers();
+	const actualLayerCount = await eda.pcb_Layer.getTheNumberOfCopperLayers().catch(() => 2);
 	const nets = await eda.pcb_Net.getAllNetsName();
 	const allComponents = await eda.pcb_PrimitiveComponent.getAll();
 	const allVias = await eda.pcb_PrimitiveVia.getAll();
@@ -283,9 +288,13 @@ async function collectBoardData() {
 	]);
 
 	const copperLayers: LayerInfo[] = [];
+	const innerLayerCount = actualLayerCount - 2;
 	for (const l of layers) {
-		if (isCopperLayer(l.id as number)) {
-			copperLayers.push({ id: l.id as number, name: l.name, type: l.type as string });
+		const lid = l.id as number;
+		if (lid === 1 || lid === 2) {
+			copperLayers.push({ id: lid, name: l.name, type: l.type as string });
+		} else if (lid >= 15 && lid < 15 + innerLayerCount) {
+			copperLayers.push({ id: lid, name: l.name, type: l.type as string });
 		}
 	}
 	copperLayers.sort((a, b) => a.id - b.id);
@@ -410,11 +419,15 @@ async function collectBoardData() {
 			catch { /* skip */ }
 		}
 
+		const fpInfo = comp.getState_Footprint?.();
+		const footprintName = String(fpInfo?.name || otherProps.Footprint || otherProps['Supplier Footprint'] || 'Unknown');
+
 		components.push({
 			primitiveId: compId,
 			designator: comp.getState_Designator() || '',
 			name: deviceName,
 			value: compValue,
+			footprintName,
 			x: comp.getState_X(),
 			y: comp.getState_Y(),
 			rotation: comp.getState_Rotation(), // RADIANS
@@ -433,15 +446,16 @@ async function collectBoardData() {
 	const padExports: PadExportInfo[] = [];
 	let padGlobalIdx = 0;
 
-	function findOrAddPadStack(shape: string, w: number, h: number, drill: number, layers: number[], isThrough: boolean): number {
-		const key = padStackKey(shape, w, h, drill, isThrough);
+	function findOrAddPadStack(shape: string, w: number, h: number, drill: number, layers: number[], isThrough: boolean, drillW = 0, drillH = 0, drillType = 'ROUND'): number {
+		const key = padStackKey(shape, w, h, drill, isThrough) + `_${drillW}_${drillH}_${drillType}`;
 		for (const ps of padStacks) {
-			if (padStackKey(ps.shape, ps.width, ps.height, ps.drill, ps.isThrough) === key) {
+			const psKey = padStackKey(ps.shape, ps.width, ps.height, ps.drill, ps.isThrough) + `_${ps.drillWidth}_${ps.drillHeight}_${ps.drillType}`;
+			if (psKey === key) {
 				return ps.id;
 			}
 		}
 		const id = padStacks.length;
-		padStacks.push({ id, shape, width: w, height: h, drill, layers, isThrough });
+		padStacks.push({ id, shape, width: w, height: h, drill, drillWidth: drillW, drillHeight: drillH, drillType, layers, isThrough });
 		return id;
 	}
 
@@ -453,12 +467,12 @@ async function collectBoardData() {
 		if (comp.footprintData && comp.footprintData.pads.length > 0) {
 			_gcLog('[GC] Using footprint pads for:', comp.designator, 'count:', comp.footprintData.pads.length);
 			for (const fpPad of comp.footprintData.pads) {
-				_gcLog('[GC]   Pad:', fpPad.padNumber, 'shape:', fpPad.shape, 'w:', fpPad.width, 'h:', fpPad.height, 'drill:', fpPad.holeDiameter, 'pos:', fpPad.x, fpPad.y, 'rot:', fpPad.rotation);
-				const isThrough = fpPad.holeDiameter > 0;
+				_gcLog('[GC]   Pad:', fpPad.padNumber, 'shape:', fpPad.shape, 'w:', fpPad.width, 'h:', fpPad.height, 'drill:', fpPad.holeDiameter, 'pos:', fpPad.x, fpPad.y, 'rot:', fpPad.rotation, 'layer:', fpPad.layerId);
+				const isThrough = fpPad.holeDiameter > 0 || fpPad.layerId === 12;
 				const psLayers = isThrough ? copperLayers.map(l => l.id) : [comp.layer];
 				const psId = findOrAddPadStack(
 					fpPad.shape, fpPad.width, fpPad.height, fpPad.holeDiameter,
-					psLayers, isThrough,
+					psLayers, isThrough, fpPad.holeWidth, fpPad.holeHeight, fpPad.holeType,
 				);
 				const pid = padGlobalIdx++;
 
@@ -505,6 +519,7 @@ async function collectBoardData() {
 					ref: comp.designator,
 					padNumber: padInfo.padNumber || '1',
 					padStackId: psId, padId: pid,
+					rotation: 0,
 				});
 			}
 		}
@@ -652,14 +667,33 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 			out.push(`PAD ${padName} RECTANGULAR ${fmt(ps.drill)}`);
 			out.push(`RECTANGLE ${fmt(-ps.width / 2)} ${fmt(-ps.height / 2)} ${fmt(ps.width)} ${fmt(ps.height)}`);
 		}
-		else if (shape === 'OVAL') {
+		else if (shape === 'OVAL' || shape === 'OBLONG') {
 			if (Math.abs(ps.width - ps.height) < 0.01) {
 				out.push(`PAD ${padName} ROUND ${fmt(ps.drill)}`);
 				out.push(`CIRCLE 0 0 ${fmt(ps.width / 2)}`);
 			}
 			else {
-				out.push(`PAD ${padName} OBLONG ${fmt(ps.drill)}`);
-				out.push(`RECTANGLE ${fmt(-ps.width / 2)} ${fmt(-ps.height / 2)} ${fmt(ps.width)} ${fmt(ps.height)}`);
+				// Stadium shape: POLYGON with ARC + LINE (CCW outline)
+				out.push(`PAD ${padName} POLYGON ${fmt(ps.drill)}`);
+				const hw = ps.width / 2;
+				const hh = ps.height / 2;
+				if (ps.width > ps.height) {
+					// Horizontal oval: semicircle radius = hh
+					const r = hh;
+					const sx = hw - r;
+					out.push(`ARC ${fmt(-sx)} ${fmt(r)} ${fmt(-sx)} ${fmt(-r)} ${fmt(-sx)} 0`);
+					out.push(`LINE ${fmt(-sx)} ${fmt(-r)} ${fmt(sx)} ${fmt(-r)}`);
+					out.push(`ARC ${fmt(sx)} ${fmt(-r)} ${fmt(sx)} ${fmt(r)} ${fmt(sx)} 0`);
+					out.push(`LINE ${fmt(sx)} ${fmt(r)} ${fmt(-sx)} ${fmt(r)}`);
+				} else {
+					// Vertical oval: semicircle radius = hw
+					const r = hw;
+					const sy = hh - r;
+					out.push(`ARC ${fmt(r)} ${fmt(-sy)} ${fmt(-r)} ${fmt(-sy)} 0 ${fmt(-sy)}`);
+					out.push(`LINE ${fmt(-r)} ${fmt(-sy)} ${fmt(-r)} ${fmt(sy)}`);
+					out.push(`ARC ${fmt(-r)} ${fmt(sy)} ${fmt(r)} ${fmt(sy)} 0 ${fmt(sy)}`);
+					out.push(`LINE ${fmt(r)} ${fmt(sy)} ${fmt(r)} ${fmt(-sy)}`);
+				}
 			}
 		}
 		else {
@@ -692,9 +726,14 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 
 	// ========== $SHAPES ==========
 	out.push('$SHAPES');
+	const emittedShapes = new Set<string>();
 	for (const comp of components) {
 		if (!comp.designator) continue;
-		out.push(`SHAPE "${comp.designator}"`);
+		const shapeName = comp.footprintName;
+		if (emittedShapes.has(shapeName)) continue;
+		emittedShapes.add(shapeName);
+
+		out.push(`SHAPE "${shapeName}"`);
 
 		// INSERT SMD or TH based on whether any pad has a drill hole
 		const compPadsForInsert = padExports.filter(p => p.ref === comp.designator);
@@ -704,7 +743,7 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 		});
 		out.push(isThrough ? 'INSERT TH' : 'INSERT SMD');
 
-		console.warn('[GC] SHAPE:', comp.designator, 'footprintOutlines:', comp.footprintData?.outlines.length || 0);
+		console.warn('[GC] SHAPE:', shapeName, 'footprintOutlines:', comp.footprintData?.outlines.length || 0);
 
 		// Silkscreen outline from footprint source
 		if (comp.footprintData && comp.footprintData.outlines.length > 0) {
@@ -760,17 +799,16 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 			const ly = dx * sinA + dy * cosA;
 			const layer = comp.layer === 1 ? 'TOP' : 'BOTTOM';
 			const padRot = pad.rotation || 0;
-				out.push(`PIN "${pad.padNumber}" ${padNameByPsId.get(pad.padStackId) || 'P0'} ${fmt(lx)} ${fmt(ly)} ${layer} ${padRot.toFixed(2)} 0`);
+				out.push(`PIN "${pad.padNumber}" ps${pad.padStackId} ${fmt(lx)} ${fmt(ly)} ${layer} ${padRot.toFixed(2)} 0`);
 		}
 	}
 
 	// Free pads as virtual components
 	for (let fi = 0; fi < freePads.length; fi++) {
 		const fp = freePads[fi];
-		const padName = padNameByPsId.get(fp.padStackId) || 'P0';
 		out.push(`SHAPE "FP${fi + 1}"`);
 		out.push('INSERT SMD');
-		out.push(`PIN "1" ${padName} 0 0 TOP 0 0`);
+		out.push(`PIN "1" ps${fp.padStackId} 0 0 TOP 0 0`);
 	}
 
 	out.push('$ENDSHAPES');
@@ -787,7 +825,7 @@ function generateGencadContent(data: Awaited<ReturnType<typeof collectBoardData>
 		out.push(`PLACE ${fmt(comp.x)} ${fmt(comp.y)}`);
 		out.push(`LAYER ${layer}`);
 		out.push(`ROTATION ${rotDeg.toFixed(2)}`);
-		out.push(`SHAPE "${comp.designator}" 0 ${comp.layer === 1 ? '0' : 'FLIP'}`);
+		out.push(`SHAPE "${comp.footprintName}" 0 ${comp.layer === 1 ? '0' : 'FLIP'}`);
 
 
 		// TEXT entries: only RefDes and Value using actual attribute positions

@@ -22,6 +22,7 @@
 1. 在嘉立创EDA专业版中打开一个 PCB 文档
 2. 点击 PCB 菜单栏 **Export GenCAD → Export GenCAD (.cad)...**
 3. 自动生成并下载 `.cad` 文件
+4. 导出的 `.cad` 文件可以使用[在线GernCAD查看器](https://pcbtool.net/tools/online-gencad-viewer.html)进行预览
 
 ## 导出格式
 

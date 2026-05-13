@@ -10,6 +10,9 @@ export interface FootprintPadData {
 	height: number;
 	shape: string;
 	holeDiameter: number;
+	holeWidth: number;
+	holeHeight: number;
+	holeType: string;
 	rotation: number;
 	layerId: number;
 }
@@ -41,11 +44,17 @@ export function extractFootprintData(primitives: FootprintPrimitive[]): Footprin
 			const dp = d.defaultPad || {};
 			const hole = d.hole;
 			let holeDia = 0;
+			let holeW = 0, holeH = 0, holeType = 'ROUND';
 			if (hole) {
 				if (typeof hole === 'object') {
+					holeType = String(hole.holeType || 'ROUND').toUpperCase();
+					holeW = Number(hole.width ?? 0);
+					holeH = Number(hole.height ?? 0);
 					holeDia = Number(hole.diameter ?? hole.width ?? (hole.radius ? (hole.radius * 2) : 0));
 				} else {
 					holeDia = Number(hole) || 0;
+					holeW = holeDia;
+					holeH = holeDia;
 				}
 			}
 			pads.push({
@@ -56,6 +65,9 @@ export function extractFootprintData(primitives: FootprintPrimitive[]): Footprin
 				height: Number(dp.height ?? d.height ?? 0),
 				shape: String(dp.padType ?? d.shape ?? 'RECT').toUpperCase(),
 				holeDiameter: holeDia,
+				holeWidth: holeW,
+				holeHeight: holeH,
+				holeType,
 				rotation: Number(d.padAngle ?? d.rotation ?? d.angle ?? 0),
 				layerId: prim.layerId,
 			});
