@@ -4,5 +4,6 @@
 	"Please open a PCB document first": "请先打开一个 PCB 文档",
 	"Collecting PCB data...": "正在收集 PCB 数据...",
 	"GenCAD export completed": "GenCAD 导出完成",
-	"Export failed": "导出失败"
+	"Export failed": "导出失败",
+	"This is a sample IFrame page": "这是一个示例 IFrame 页面"
 }

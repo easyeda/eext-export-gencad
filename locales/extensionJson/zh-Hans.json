@@ -1,4 +1,12 @@
 {
 	"Export GenCAD": "导出GenCAD",
-	"Export GenCAD (.cad)...": "导出 GenCAD (.cad)..."
+	"Export GenCAD (.cad)...": "导出 GenCAD (.cad)...",
+	"Export GenCAD (displayName)": "导出GenCAD",
+	"Export PCB to GenCAD (.cad) format for PCB manufacturing and test data exchange.": "导出 PCB 为 GenCAD (.cad) 格式文件，用于 PCB 制造和测试数据交换。",
+	"导出GenCAD": "导出GenCAD",
+	"导出 PCB 为 GenCAD (.cad) 格式文件，用于 PCB 制造和测试数据交换。": "导出 PCB 为 GenCAD (.cad) 格式文件，用于 PCB 制造和测试数据交换。",
+	"Tool": "工具",
+	"Export": "导出",
+	"GenCAD": "GenCAD",
+	"Manufacturing": "制造"
 }

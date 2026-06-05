@@ -4,5 +4,6 @@
 	"Please open a PCB document first": "Please open a PCB document first",
 	"Collecting PCB data...": "Collecting PCB data...",
 	"GenCAD export completed": "GenCAD export completed",
-	"Export failed": "Export failed"
+	"Export failed": "Export failed",
+	"This is a sample IFrame page": "This is a sample IFrame page"
 }
